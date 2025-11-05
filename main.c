@@ -8,6 +8,15 @@
 #define TOKEN_DELIMITERS  " \t\r\n\a"
 #define MAX_TOKENS          64
 
+#define ANSI_COLOR_CYAN    "\033[0;36m"
+#define ANSI_RESET_ALL     "\033[0m"
+#define ANSI_COLOR_RED     "\033[0;31m"
+#define ANSI_COLOR_GREEN   "\033[0;32m"
+#define ANSI_COLOR_YELLOW  "\033[0;33m"
+#define ANSI_COLOR_BLUE    "\033[0;34m"
+#define ANSI_COLOR_MAGENTA "\033[0;35m"
+#define ANSI_COLOR_WHITE   "\033[0;37m"
+
 struct tokens {
     char ** items;
     int     size;
@@ -20,6 +29,8 @@ enum EXIT_CODES {
     EXIT_MISC_FAILURE_CODE     = 3
 };
 
+void          set_text_color(const char * color_code);
+void          reset_text_color();
 void          handle_exit   (int error_code);
 void          signal_handler(int signum);
 void          shell_loop();
@@ -33,6 +44,12 @@ int           shell_cd       (struct tokens args);
 int           shell_echo     (struct tokens args);
 
 char * available_commands[]                  = {"cd", "exit", "help", "echo"};
+char * built_in_command_descriptions[] = {
+    "Change the current directory. Usage: cd <directory_path>",
+    "Exit the microshell.",
+    "Display this help message.",
+    "Echo the input arguments to the console. Supports environment variables with $VAR_NAME."
+};
 int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo};
 
 int main() {
@@ -41,27 +58,45 @@ int main() {
     return EXIT_SUCCESS;
 }
 
+void set_text_color(const char * color_code) {
+    printf("%s", color_code);
+}
+
+void reset_text_color() {
+    printf("\033[0m");
+}
+
 void handle_exit(int error_code) {
     switch (error_code)
     {
     case EXIT_SUCCESS_CODE:
+        set_text_color(ANSI_COLOR_GREEN);
         printf("\nmicroshell: Exiting microshell. Goodbye!\n");
+        reset_text_color();
         exit(EXIT_SUCCESS);
         break;
     case EXIT_SIGINT_CODE:
+        set_text_color(ANSI_COLOR_GREEN);
         printf("\nmicroshell: Exiting microshell due to SIGINT (Ctrl+C).\n");
+        reset_text_color();
         exit(EXIT_SUCCESS);
         break;
     case EXIT_ALLOCATION_ERROR_CODE:
+        set_text_color(ANSI_COLOR_RED);
         fprintf(stderr, "\nmicroshell: Exiting microshell due to allocation error.\n");
+        reset_text_color();
         exit(EXIT_FAILURE);
         break;
     case EXIT_MISC_FAILURE_CODE:
+        set_text_color(ANSI_COLOR_RED);
         fprintf(stderr, "\nmicroshell: Exiting microshell due to an error.\n");
+        reset_text_color();
         exit(EXIT_FAILURE);
         break;
     default:
+        set_text_color(ANSI_COLOR_RED);
         printf("\nmicroshell: Exiting microshell...\n");
+        reset_text_color();
         exit(EXIT_SUCCESS);
         break;
     }
@@ -152,11 +187,18 @@ int execute_command(struct tokens args) {
 }
 
 int shell_help(struct tokens args) {
+    set_text_color(ANSI_COLOR_CYAN);
+    printf("This is a microshell created by Aleksey Pravilov - s498780\n");
     printf("Microshell Help:\n");
+    set_text_color(ANSI_COLOR_GREEN);
     printf("Available commands:\n");
     for (int i = 0; i < sizeof(available_commands) / sizeof(available_commands[0]); i++) {
+        set_text_color(ANSI_COLOR_YELLOW);
         printf(" - %s\n", available_commands[i]);
+        set_text_color(ANSI_COLOR_MAGENTA);
+        printf("     %s\n", built_in_command_descriptions[i]);
     }
+    reset_text_color();
     return 0;
 }
 

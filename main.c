@@ -10,13 +10,13 @@
 #define TOKEN_DELIMITERS  " \t\r\n\a"
 #define MAX_TOKENS          64
 
-#define ANSI_COLOR_CYAN    "\033[0;36m"
 #define ANSI_RESET_ALL     "\033[0m"
 #define ANSI_COLOR_RED     "\033[0;31m"
 #define ANSI_COLOR_GREEN   "\033[0;32m"
 #define ANSI_COLOR_YELLOW  "\033[0;33m"
 #define ANSI_COLOR_BLUE    "\033[0;34m"
 #define ANSI_COLOR_MAGENTA "\033[0;35m"
+#define ANSI_COLOR_CYAN    "\033[0;36m"
 #define ANSI_COLOR_WHITE   "\033[0;37m"
 
 struct tokens {
@@ -53,7 +53,7 @@ char * built_in_command_descriptions[] = {
     "Exit the microshell.",
     "Display this help message.",
     "Echo the input arguments to the console. Supports environment variables with $VAR_NAME.",
-    "Display the current folder tree."
+    "Display the current folder tree. You can also give a name of the folder you want to see the contents of as an argument. You can add a flag -r to perform a recursive search."
 };
 int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree};
 
@@ -138,7 +138,7 @@ void print_user_directory_prefix() {
         perror("microshell: getcwd() error");
         directory_path[0] = '\0';
     }
-    printf("%s@%s > ", username ? username : "Unknown user", directory_path);
+    printf("%s@%s Microshell: > ", username ? username : "Unknown user", directory_path);
 }
 
 char * read_input() {
@@ -180,6 +180,29 @@ struct tokens parse_input(const char * input) {
     result.items = tokens;
     result.size = token_position;
     return result;
+}
+
+int check_flag(struct tokens args, char flag) {
+    int found_flags = 0;
+    for (int i = 0; i < args.size; i++) {
+        if (args.items[i][0] == '-') {
+            found_flags = 1;
+            int current_character = 1;
+            while (args.items[i][current_character] != '\0') {
+                if (args.items[i][current_character] == flag) {
+                    return 1;
+                }
+                current_character++;
+            }
+        }
+    }
+    if (found_flags == 0) {
+        return 0;
+    }
+    set_text_color(ANSI_COLOR_RED);
+    printf("The flags provided are not compatible with this command.\n");
+    reset_text_color();
+    return 2;
 }
 
 int execute_command(struct tokens args) {
@@ -259,13 +282,25 @@ int shell_echo(struct tokens args) {
 }
 
 int shell_tree(struct tokens args) {
-    if (args.size > 1) {
+    if (args.size > 3) {
         set_text_color(ANSI_COLOR_RED);
-        printf("Expected no arguments, received %d.\n", args.size - 1);
+        printf("Expected no more than 2 arguments, received %d.\n", args.size - 1);
         reset_text_color();
         return 0;
     }
-    shell_recursive_tree("", ".", "", 0, 10);
+    int recursion = check_flag(args, 'r');
+    if (recursion == 2) {
+        return 0;
+    }
+    int max_iterations = check_flag(args, 'r') * 5;
+    char path[1024] = ".";
+    for (int i = 1; i < args.size; i++) {
+        if (args.items[i][0] != '-') {
+            snprintf(path, sizeof(path), "%s", args.items[i]);
+            break;
+        }
+    }
+    shell_recursive_tree("", path, "", 0, max_iterations);
     return 0;
 }
 
@@ -312,17 +347,28 @@ void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], con
             } else {
                 snprintf(new_prefix, sizeof(new_prefix), "%s│  ", print_prefix);
             }
-            set_text_color(ANSI_COLOR_MAGENTA);
+            if (entry->d_name[0] == '.') {
+                set_text_color(ANSI_COLOR_CYAN);
+            } else {
+                set_text_color(ANSI_COLOR_MAGENTA);
+            }
             printf("%s\n", entry->d_name);
             reset_text_color();
             shell_recursive_tree(path, entry->d_name, new_prefix, current_iteration + 1, max_iterations);
-            reset_text_color();
         }
         else if (entry->d_type == DT_REG) {
+            if (entry->d_name[0] == '.') {
+                set_text_color(ANSI_COLOR_CYAN);
+            }
             printf("%s\n", entry->d_name);
+            reset_text_color();
         }
         else {
+            if (entry->d_name[0] == '.') {
+                set_text_color(ANSI_COLOR_CYAN);
+            }
             printf("%s\n", entry->d_name);
+            reset_text_color();
         }
         current_file += 1;
     }

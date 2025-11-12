@@ -3,6 +3,8 @@
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <sys/types.h>
 
 #define COMMAND_BUFFER_SIZE 1024
 #define TOKEN_DELIMITERS  " \t\r\n\a"
@@ -42,18 +44,22 @@ int           shell_help     (struct tokens args);
 int           shell_exit     (struct tokens args);
 int           shell_cd       (struct tokens args);
 int           shell_echo     (struct tokens args);
+int           shell_tree     (struct tokens args);
+void          shell_recursive_tree(const char prev_dir_name[], const char dir_name[], const char print_prefix[], int current_iteration, int max_iterations);
 
-char * available_commands[]                  = {"cd", "exit", "help", "echo"};
+char * available_commands[]                  = {"cd", "exit", "help", "echo", "tree"};
 char * built_in_command_descriptions[] = {
     "Change the current directory. Usage: cd <directory_path>",
     "Exit the microshell.",
     "Display this help message.",
-    "Echo the input arguments to the console. Supports environment variables with $VAR_NAME."
+    "Echo the input arguments to the console. Supports environment variables with $VAR_NAME.",
+    "Display the current folder tree."
 };
-int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo};
+int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree};
 
 int main() {
     signal(SIGINT, signal_handler);
+    signal(SIGSTOP, signal_handler);
     shell_loop();
     return EXIT_SUCCESS;
 }
@@ -105,6 +111,9 @@ void handle_exit(int error_code) {
 void signal_handler(int signum) {
     if (signum == SIGINT) {
         handle_exit(EXIT_SIGINT_CODE);
+    }
+    if (signum == SIGSTOP) {
+        printf("microshell: Received SIGSTOP signal. Ignoring.\n");
     }
 }
 
@@ -247,4 +256,75 @@ int shell_echo(struct tokens args) {
     }
     printf("\n");
     return 0;
+}
+
+int shell_tree(struct tokens args) {
+    if (args.size > 1) {
+        set_text_color(ANSI_COLOR_RED);
+        printf("Expected no arguments, received %d.\n", args.size - 1);
+        reset_text_color();
+        return 0;
+    }
+    shell_recursive_tree("", ".", "", 0, 10);
+    return 0;
+}
+
+void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], const char print_prefix[], int current_iteration, int max_iterations) {
+    if (current_iteration > max_iterations) {
+        return;
+    }
+    char path[1024];
+    if (strcmp(prev_dir_name, "") == 0) {
+        snprintf(path, sizeof(path), "%s", dir_name);
+    } else {
+        snprintf(path, sizeof(path), "%s/%s", prev_dir_name, dir_name);
+    }
+    DIR * dir = opendir(path);
+    struct dirent * entry;
+    if (dir == NULL) {
+        perror("opendir");
+        return;
+    }
+    int total_files = 0;
+    int current_file = 0;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (entry->d_type == DT_DIR || entry->d_type == DT_REG) {
+            total_files++;
+        }
+    }
+    dir = opendir(path);
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        if (current_file == total_files - 1) {
+            printf("%s└──", print_prefix);
+        } else {
+            printf("%s├──", print_prefix);
+        }
+        if (entry->d_type == DT_DIR) {
+            char new_prefix[1024];
+            if (current_file == total_files - 1) {
+                snprintf(new_prefix, sizeof(new_prefix), "%s   ", print_prefix);
+            } else {
+                snprintf(new_prefix, sizeof(new_prefix), "%s│  ", print_prefix);
+            }
+            set_text_color(ANSI_COLOR_MAGENTA);
+            printf("%s\n", entry->d_name);
+            reset_text_color();
+            shell_recursive_tree(path, entry->d_name, new_prefix, current_iteration + 1, max_iterations);
+            reset_text_color();
+        }
+        else if (entry->d_type == DT_REG) {
+            printf("%s\n", entry->d_name);
+        }
+        else {
+            printf("%s\n", entry->d_name);
+        }
+        current_file += 1;
+    }
+    closedir(dir);
 }

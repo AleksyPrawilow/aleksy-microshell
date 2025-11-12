@@ -39,6 +39,7 @@ void          shell_loop();
 void          print_user_directory_prefix();
 char *        read_input();
 struct tokens parse_input(const char *input);
+int           check_flag(struct tokens args, char flag);
 int           execute_command(struct tokens args);
 int           shell_help     (struct tokens args);
 int           shell_exit     (struct tokens args);
@@ -214,7 +215,21 @@ int execute_command(struct tokens args) {
             return ((int (*)(struct tokens))command_functions[i])(args);
         }
     }
-    printf("microshell: Command not found: %s\n", args.items[0]);
+    pid_t pid = fork();
+    if (pid == 0) {
+        signal(SIGINT, SIG_DFL);
+        execvp(args.items[0], args.items);
+        set_text_color(ANSI_COLOR_RED);
+        printf("microshell: Failed to execute.\n");
+        reset_text_color();
+        exit(EXIT_FAILURE);
+    } else if (pid > 0) {
+        wait(NULL);
+    } else {
+        set_text_color(ANSI_COLOR_RED);
+        printf("microshell: Something went wrong while creating a process.\n");
+        reset_text_color();
+    }
     return 0;
 }
 

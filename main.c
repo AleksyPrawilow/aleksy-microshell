@@ -1,10 +1,21 @@
+/*
+    A makefile is recommended for compilation:
+    '''
+    all:
+        gcc main.c -o microshell -lreadline
+    '''
+*/
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <signal.h>
 #include <unistd.h>
 #include <dirent.h>
+#include <sys/wait.h>
 #include <sys/types.h>
+#include <readline/readline.h>
+#include <readline/history.h>
 
 #define COMMAND_BUFFER_SIZE 1024
 #define TOKEN_DELIMITERS  " \t\r\n\a"
@@ -31,12 +42,14 @@ enum EXIT_CODES {
     EXIT_MISC_FAILURE_CODE     = 3
 };
 
+char **       microshell_completion(const char * text, int start, int end);
+char *        command_generator(const char * text, int state);
 void          set_text_color(const char * color_code);
 void          reset_text_color();
 void          handle_exit   (int error_code);
 void          signal_handler(int signum);
 void          shell_loop();
-void          print_user_directory_prefix();
+void          get_user_directory_prefix(char * buffer, size_t size);
 char *        read_input();
 struct tokens parse_input(const char *input);
 int           check_flag(struct tokens args, char flag);
@@ -58,9 +71,33 @@ char * built_in_command_descriptions[] = {
 };
 int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree};
 
+char ** microshell_completion(const char * text, int start, int end) {
+    (void)end;
+
+    if (start == 0) {
+        return rl_completion_matches(text, command_generator);
+    }
+
+    return NULL;
+}
+
+char * command_generator(const char * text, int state) {
+    static int index;
+    if (state == 0) index = 0;
+
+    while (index < (int)(sizeof(available_commands) / sizeof(char *))) {
+        const char * name = available_commands[index++];
+        if (strncmp(name, text, strlen(text)) == 0) {
+            return strdup(name);
+        }
+    }
+    return NULL;
+}
+
 int main() {
+    rl_attempted_completion_function = microshell_completion;
     signal(SIGINT, signal_handler);
-    signal(SIGSTOP, signal_handler);
+    signal(SIGTSTP, signal_handler);
     shell_loop();
     return EXIT_SUCCESS;
 }
@@ -113,8 +150,8 @@ void signal_handler(int signum) {
     if (signum == SIGINT) {
         handle_exit(EXIT_SIGINT_CODE);
     }
-    if (signum == SIGSTOP) {
-        printf("microshell: Received SIGSTOP signal. Ignoring.\n");
+    if (signum == SIGTSTP) {
+        printf("microshell: Received SIGTSTP signal. Ignoring.\n");
     }
 }
 
@@ -123,56 +160,56 @@ void shell_loop() {
     struct tokens args;
     int run_status = 0;
     do {
-        print_user_directory_prefix();
         input = read_input();
         args = parse_input(input);
         run_status = execute_command(args);
         free(input);
+        if (args.size > 0) {
+            free(args.items[0]);
+        }
         free(args.items);
     } while (run_status == 0);
 }
 
-void print_user_directory_prefix() {
+void get_user_directory_prefix(char * buffer, size_t size) {
     char * username = getenv("USER");
     char directory_path[1024];
     if (getcwd(directory_path, sizeof(directory_path)) == NULL) {
         perror("microshell: getcwd() error");
         directory_path[0] = '\0';
     }
-    printf("%s@%s Microshell: > ", username ? username : "Unknown user", directory_path);
+    snprintf(buffer, size, "%s@%s Microshell: > ", username ? username : "Unknown user", directory_path);
 }
 
 char * read_input() {
-    size_t buffer_size = COMMAND_BUFFER_SIZE;
-    char * buffer = malloc(COMMAND_BUFFER_SIZE * sizeof(char));
-    if (!buffer) {
-        fprintf(stderr, "microshell: Allocation error\n");
-        handle_exit(EXIT_ALLOCATION_ERROR_CODE);
+    char prefix[1024];
+    get_user_directory_prefix(prefix, sizeof(prefix));
+    char * line = readline(prefix);
+    if (!line) {
+        handle_exit(EXIT_SUCCESS_CODE);
     }
-    int num_characters = getline(&buffer, &buffer_size, stdin);
-    if (num_characters == -1) {
-        free(buffer);
-        printf("microshell: An error has occured. Exiting\n");
-        handle_exit(EXIT_MISC_FAILURE_CODE);
+    if (*line) {
+        add_history(line);
     }
-    return buffer;
+    return line;
 }
 
 struct tokens parse_input(const char * input) {
     struct tokens result;
+    char * input_copy = strdup(input);
     int token_position = 0;
     char ** tokens = malloc(MAX_TOKENS * sizeof(char * ));
-    char * token;
     if (!tokens) {
         fprintf(stderr, "microshell: Allocation error\n");
         handle_exit(EXIT_ALLOCATION_ERROR_CODE);
     }
-    token = strtok((char *)input, TOKEN_DELIMITERS);
+    char * token = strtok(input_copy, TOKEN_DELIMITERS);
     while (token != NULL) {
-        tokens[token_position] = token;
-        token_position++;
+        tokens[token_position++] = token;
         if (token_position >= MAX_TOKENS) {
             fprintf(stderr, "microshell: Too many tokens\n");
+            free(tokens);
+            free(input_copy);
             handle_exit(EXIT_MISC_FAILURE_CODE);
         }
         token = strtok(NULL, TOKEN_DELIMITERS);
@@ -307,7 +344,7 @@ int shell_tree(struct tokens args) {
     if (recursion == 2) {
         return 0;
     }
-    int max_iterations = check_flag(args, 'r') * 5;
+    int max_iterations = recursion * 5;
     char path[1024] = ".";
     for (int i = 1; i < args.size; i++) {
         if (args.items[i][0] != '-') {
@@ -345,6 +382,7 @@ void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], con
             total_files++;
         }
     }
+    closedir(dir);
     dir = opendir(path);
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {

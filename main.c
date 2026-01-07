@@ -71,6 +71,8 @@ char * built_in_command_descriptions[] = {
 };
 int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree};
 
+pid_t current_process_pid = 0;
+
 char ** microshell_completion(const char * text, int start, int end) {
     (void)end;
 
@@ -148,7 +150,13 @@ void handle_exit(int error_code) {
 
 void signal_handler(int signum) {
     if (signum == SIGINT) {
-        handle_exit(EXIT_SIGINT_CODE);
+        if (current_process_pid > 0) {
+            kill(current_process_pid, SIGINT);
+        } else {
+            printf("\n");
+            rl_on_new_line();
+            rl_redisplay();
+        }
     }
     if (signum == SIGTSTP) {
         printf("microshell: Received SIGTSTP signal. Ignoring.\n");
@@ -261,7 +269,10 @@ int execute_command(struct tokens args) {
         reset_text_color();
         exit(EXIT_FAILURE);
     } else if (pid > 0) {
-        wait(NULL);
+        current_process_pid = pid;
+        int status;
+        waitpid(pid, &status, 0);
+        current_process_pid = 0;   
     } else {
         set_text_color(ANSI_COLOR_RED);
         printf("microshell: Something went wrong while creating a process.\n");

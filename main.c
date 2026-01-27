@@ -17,9 +17,13 @@
 #include <readline/readline.h>
 #include <readline/history.h>
 
-#define COMMAND_BUFFER_SIZE 1024
+#define COMMAND_BUFFER_SIZE 4096
 #define TOKEN_DELIMITERS  " \t\r\n\a"
-#define MAX_TOKENS          64
+#define MAX_TOKENS          1024
+#define TRUE                1
+#define FALSE               0
+#define ERROR_CODE          -1
+#define TREE_RECURSION_DEPTH 5
 
 #define ANSI_RESET_ALL     "\033[0m"
 #define ANSI_COLOR_RED     "\033[0;31m"
@@ -37,9 +41,8 @@ struct tokens {
 
 enum EXIT_CODES {
     EXIT_SUCCESS_CODE          = 0,
-    EXIT_SIGINT_CODE           = 1,
-    EXIT_ALLOCATION_ERROR_CODE = 2,
-    EXIT_MISC_FAILURE_CODE     = 3
+    EXIT_ALLOCATION_ERROR_CODE = 1,
+    EXIT_MISC_FAILURE_CODE     = 2
 };
 
 char **       microshell_completion(const char * text, int start, int end);
@@ -60,19 +63,22 @@ int           shell_cd       (struct tokens args);
 int           shell_echo     (struct tokens args);
 int           shell_tree     (struct tokens args);
 void          shell_recursive_tree(const char prev_dir_name[], const char dir_name[], const char print_prefix[], int current_iteration, int max_iterations);
+int           shell_cat      (struct tokens args);
 
-char * available_commands[]                  = {"cd", "exit", "help", "echo", "tree"};
+char * available_commands[] = {"cd", "exit", "help", "echo", "tree", "cat"};
 char * built_in_command_descriptions[] = {
     "Change the current directory. Usage: cd <directory_path>",
     "Exit the microshell.",
     "Display this help message.",
     "Echo the input arguments to the console. Supports environment variables with $VAR_NAME.",
-    "Display the current folder tree. You can also give a name of the folder you want to see the contents of as an argument. You can add a flag -r to perform a recursive search."
+    "Display the current folder tree. You can also give a name of the folder you want to see the contents of as an argument. You can add a flag -r to perform a recursive search.",
+    "Print files contents to standard output. Usage: cat <file1> <file2>"
 };
-int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree};
+int ( * command_functions[]) (struct tokens) = {&shell_cd, &shell_exit, &shell_help, &shell_echo, &shell_tree, &shell_cat}; // lista funkcji do wywolania
 
 pid_t current_process_pid = 0;
 
+// autouzupelnienie zbudowane na podstawie dokumentacji biblioteki readline
 char ** microshell_completion(const char * text, int start, int end) {
     (void)end;
 
@@ -121,12 +127,6 @@ void handle_exit(int error_code) {
         reset_text_color();
         exit(EXIT_SUCCESS);
         break;
-    case EXIT_SIGINT_CODE:
-        set_text_color(ANSI_COLOR_GREEN);
-        printf("\nmicroshell: Exiting microshell due to SIGINT (Ctrl+C).\n");
-        reset_text_color();
-        exit(EXIT_SUCCESS);
-        break;
     case EXIT_ALLOCATION_ERROR_CODE:
         set_text_color(ANSI_COLOR_RED);
         fprintf(stderr, "\nmicroshell: Exiting microshell due to allocation error.\n");
@@ -149,17 +149,8 @@ void handle_exit(int error_code) {
 }
 
 void signal_handler(int signum) {
-    if (signum == SIGINT) {
-        if (current_process_pid > 0) {
-            kill(current_process_pid, SIGINT);
-        } else {
-            printf("\n");
-            rl_on_new_line();
-            rl_redisplay();
-        }
-    }
-    if (signum == SIGTSTP) {
-        printf("microshell: Received SIGTSTP signal. Ignoring.\n");
+    if (current_process_pid > 0) {
+        kill(current_process_pid, SIGINT);
     }
 }
 
@@ -172,25 +163,22 @@ void shell_loop() {
         args = parse_input(input);
         run_status = execute_command(args);
         free(input);
-        if (args.size > 0) {
-            free(args.items[0]);
-        }
         free(args.items);
-    } while (run_status == 0);
+   } while (run_status == 0);
 }
 
 void get_user_directory_prefix(char * buffer, size_t size) {
     char * username = getenv("USER");
-    char directory_path[1024];
+    char directory_path[COMMAND_BUFFER_SIZE];
     if (getcwd(directory_path, sizeof(directory_path)) == NULL) {
         perror("microshell: getcwd() error");
         directory_path[0] = '\0';
     }
-    snprintf(buffer, size, "%s@%s Microshell: > ", username ? username : "Unknown user", directory_path);
+    snprintf(buffer, size, "%s@%s Microshell: > ", username, directory_path);
 }
 
 char * read_input() {
-    char prefix[1024];
+    char prefix[COMMAND_BUFFER_SIZE];
     get_user_directory_prefix(prefix, sizeof(prefix));
     char * line = readline(prefix);
     if (!line) {
@@ -204,7 +192,7 @@ char * read_input() {
 
 struct tokens parse_input(const char * input) {
     struct tokens result;
-    char * input_copy = strdup(input);
+    char * input_copy = strdup(input); // robimy kopie inputu bo strtok modyfikuje go
     int token_position = 0;
     char ** tokens = malloc(MAX_TOKENS * sizeof(char * ));
     if (!tokens) {
@@ -220,7 +208,7 @@ struct tokens parse_input(const char * input) {
             free(input_copy);
             handle_exit(EXIT_MISC_FAILURE_CODE);
         }
-        token = strtok(NULL, TOKEN_DELIMITERS);
+        token = strtok(NULL, TOKEN_DELIMITERS); // bierzemy nastepny token
     }
     tokens[token_position] = NULL;
     result.items = tokens;
@@ -236,26 +224,26 @@ int check_flag(struct tokens args, char flag) {
             int current_character = 1;
             while (args.items[i][current_character] != '\0') {
                 if (args.items[i][current_character] == flag) {
-                    return 1;
+                    return TRUE;
                 }
                 current_character++;
             }
         }
     }
     if (found_flags == 0) {
-        return 0;
+        return FALSE;
     }
     set_text_color(ANSI_COLOR_RED);
     printf("The flags provided are not compatible with this command.\n");
     reset_text_color();
-    return 2;
+    return ERROR_CODE;
 }
 
 int execute_command(struct tokens args) {
     if (args.size == 0) {
         return 0;
     }
-    for (int i = 0; i < sizeof(available_commands) / sizeof(available_commands[0]); i++) {
+    for (int i = 0; i < sizeof(available_commands) / sizeof(available_commands[0]); i++) { // iterujemy po dostepnych komendach i wywolujemy odpowiednia
         if (strcmp(args.items[0], available_commands[i]) == 0) {
             return ((int (*)(struct tokens))command_functions[i])(args);
         }
@@ -267,12 +255,11 @@ int execute_command(struct tokens args) {
         set_text_color(ANSI_COLOR_RED);
         printf("microshell: Failed to execute.\n");
         reset_text_color();
-        exit(EXIT_FAILURE);
     } else if (pid > 0) {
         current_process_pid = pid;
         int status;
-        waitpid(pid, &status, 0);
-        current_process_pid = 0;   
+        waitpid(pid, &status, 0); // czekamy na wykonanie procesu potomnego
+        current_process_pid = 0;
     } else {
         set_text_color(ANSI_COLOR_RED);
         printf("microshell: Something went wrong while creating a process.\n");
@@ -305,6 +292,13 @@ int shell_exit(struct tokens args) {
 int shell_cd(struct tokens args) {
     if (args.size != 2) {
         fprintf(stderr, "microshell: Expected only 1 argument to \"cd\"\n");
+        return 0;
+    }
+    if (strcmp(args.items[1], "~") == 0) {
+        const char * user_directory = getenv("HOME");
+        if (chdir(user_directory) != 0) {
+            perror("microshell: Failed to change directory");
+        }
         return 0;
     }
     if (chdir(args.items[1]) != 0) {
@@ -352,13 +346,17 @@ int shell_tree(struct tokens args) {
         return 0;
     }
     int recursion = check_flag(args, 'r');
-    if (recursion == 2) {
+    if (recursion == ERROR_CODE) {
         return 0;
     }
-    int max_iterations = recursion * 5;
-    char path[1024] = ".";
+    int max_iterations = recursion * TREE_RECURSION_DEPTH;
+    char path[COMMAND_BUFFER_SIZE] = ".";
     for (int i = 1; i < args.size; i++) {
         if (args.items[i][0] != '-') {
+            if (strcmp(args.items[i], "~") == 0) {
+                snprintf(path, sizeof(path), "%s", getenv("HOME"));
+                break;
+            }
             snprintf(path, sizeof(path), "%s", args.items[i]);
             break;
         }
@@ -371,11 +369,11 @@ void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], con
     if (current_iteration > max_iterations) {
         return;
     }
-    char path[1024];
+    char path[COMMAND_BUFFER_SIZE];
     if (strcmp(prev_dir_name, "") == 0) {
-        snprintf(path, sizeof(path), "%s", dir_name);
+        snprintf(path, sizeof(path), "%s", dir_name); // jesli to jest pierwsza iteracja to ustawiamy poprzedni folder jako biezacy
     } else {
-        snprintf(path, sizeof(path), "%s/%s", prev_dir_name, dir_name);
+        snprintf(path, sizeof(path), "%s/%s", prev_dir_name, dir_name); // Laczymy nazwy folderow zeby dostac pelna sciezke
     }
     DIR * dir = opendir(path);
     struct dirent * entry;
@@ -387,7 +385,7 @@ void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], con
     int current_file = 0;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
+            continue; // Nie liczymy obecnego i poprzedniego folderow
         }
         if (entry->d_type == DT_DIR || entry->d_type == DT_REG) {
             total_files++;
@@ -437,4 +435,32 @@ void shell_recursive_tree(const char prev_dir_name[], const char dir_name[], con
         current_file += 1;
     }
     closedir(dir);
+}
+
+int shell_cat(struct tokens args) {
+    if (args.size < 2) {
+        set_text_color(ANSI_COLOR_RED);
+        printf("Expected at least 1 argument, received %d.\n", args.size - 1);
+        reset_text_color();
+        return 0;
+    }
+
+    char buffer[COMMAND_BUFFER_SIZE];
+
+    for (int i = 1; i < args.size; i++) {
+        FILE * file = fopen(args.items[i], "r");
+        if (!file) {
+            perror(args.items[i]);
+            printf("\n");
+            continue;
+        }
+        size_t bytes;
+        while ((bytes = fread(buffer, 1, sizeof(buffer), file)) > 0) {
+            fwrite(buffer, 1, bytes, stdout);
+        }
+        fclose(file);
+        printf("\n");
+    }
+
+    return 0;
 }
